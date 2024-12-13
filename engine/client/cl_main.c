@@ -715,6 +715,9 @@ Create and send the command packet to the server
 Including both the reliable commands and the usercmds
 ===================
 */
+
+int g_iCommandsToIncreaseBy = 0;
+
 static void CL_WritePacket( void )
 {
 	sizebuf_t buf;
@@ -791,7 +794,10 @@ static void CL_WritePacket( void )
 		if( cls.lastoutgoingcommand < 0 )
 			cls.lastoutgoingcommand = cls.netchan.outgoing_sequence;
 
-		newcmds = cls.netchan.outgoing_sequence - cls.lastoutgoingcommand;
+		if( g_iCommandsToIncreaseBy > 0 )
+			newcmds = cls.netchan.outgoing_sequence - cls.lastoutgoingcommand + g_iCommandsToIncreaseBy;
+		else
+			newcmds = cls.netchan.outgoing_sequence - cls.lastoutgoingcommand;
 		newcmds = bound( 0, newcmds, maxcmds );
 		numcmds = newcmds + numbackup;
 
