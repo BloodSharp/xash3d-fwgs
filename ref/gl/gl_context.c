@@ -408,7 +408,7 @@ static const char *R_GetConfigName( void )
 	return "opengl";
 }
 
-static const ref_interface_t gReffuncs =
+const ref_interface_t gReffuncs =
 {
 	R_Init,
 	R_Shutdown,
