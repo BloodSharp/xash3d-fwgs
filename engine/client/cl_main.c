@@ -1110,8 +1110,8 @@ static void CL_SendConnectPacket( connprotocol_t proto, int challenge )
 		Info_RemoveKey( cls.userinfo, "cl_maxpayload" );
 
 		name = Info_ValueForKey( cls.userinfo, "name" );
-		if( Q_strnicmp( name, "[Xash3D]", 8 ))
-			Info_SetValueForKeyf( cls.userinfo, "name", sizeof( cls.userinfo ), "[Xash3D]%s", name );
+		//if( Q_strnicmp( name, "[Xash3D]", 8 ))
+			//Info_SetValueForKeyf( cls.userinfo, "name", sizeof( cls.userinfo ), "[Xash3D]%s", name );
 
 		MSG_Init( &send, "GoldSrcConnect", send_buf, sizeof( send_buf ));
 		MSG_WriteLong( &send, NET_HEADER_OUTOFBANDPACKET );
@@ -3055,6 +3055,7 @@ void CL_UpdateInfo( const char *key, const char *value )
 		MSG_WriteString( &cls.netchan.message, cls.userinfo );
 		break;
 	case PROTO_GOLDSRC:
+		/*
 		if( !Q_stricmp( key, "name" ) && Q_strnicmp( value, "[Xash3D]", 8 ))
 		{
 			// always prepend [Xash3D] on GoldSrc protocol :)
@@ -3062,6 +3063,7 @@ void CL_UpdateInfo( const char *key, const char *value )
 			break;
 		}
 		// intentional fallthrough
+		*/
 	default:
 		CL_ServerCommand( true, "setinfo \"%s\" \"%s\"\n", key, value );
 		break;
