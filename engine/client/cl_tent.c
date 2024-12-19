@@ -777,25 +777,15 @@ Detach entity from player
 */
 void GAME_EXPORT R_KillAttachedTents( int client )
 {
-	int	i;
+	TEMPENTITY *tent;
 
 	if( client <= 0 || client > cl.maxclients )
 		return;
 
-	for( i = 0; i < GI->max_tents; i++ )
+	for( tent = cl_active_tents; tent; tent = tent->next )
 	{
-		TEMPENTITY *pTemp = &cl_tempents[i];
-
-		if( !FBitSet( pTemp->flags, FTENT_PLYRATTACHMENT ))
-			continue;
-
-		// this TEMPENTITY is player attached.
-		// if it is attached to this client, set it to die instantly.
-		if( pTemp->clientIndex == client )
-		{
-			// good enough, it will die on next tent update.
-			pTemp->die = cl.time;
-		}
+		if( FBitSet( tent->flags, FTENT_PLYRATTACHMENT ) && tent->clientIndex == client )
+			tent->die = cl.time;
 	}
 }
 
@@ -2437,18 +2427,18 @@ static void CL_ClearLightStyles( void )
 
 void CL_SetLightstyle( int style, const char *s, float f )
 {
-	int		i, k;
-	lightstyle_t	*ls;
-	float		val1, val2;
+	int i;
+	lightstyle_t *ls;
 
-	Assert( s != NULL );
-	Assert( style >= 0 && style < MAX_LIGHTSTYLES );
+	if( unlikely( style < 0 || style >= MAX_LIGHTSTYLES ))
+	{
+		Con_Printf( S_WARN "%s: ignored invalid lightstyle id %d\n", style );
+		return;
+	}
 
 	ls = &cl.lightstyles[style];
 
-	Q_strncpy( ls->pattern, s, sizeof( ls->pattern ));
-
-	ls->length = Q_strlen( s );
+	ls->length = Q_strncpy( ls->pattern, s, sizeof( ls->pattern ));
 	ls->time = f; // set local time
 
 	for( i = 0; i < ls->length; i++ )
@@ -2458,10 +2448,10 @@ void CL_SetLightstyle( int style, const char *s, float f )
 
 	// check for allow interpolate
 	// NOTE: fast flickering styles looks ugly when interpolation is running
-	for( k = 0; k < (ls->length - 1); k++ )
+	for( i = 0; i < ( ls->length - 1 ); i++ )
 	{
-		val1 = ls->map[(k+0) % ls->length];
-		val2 = ls->map[(k+1) % ls->length];
+		float val1 = ls->map[( i + 0 ) % ls->length];
+		float val2 = ls->map[( i + 1 ) % ls->length];
 
 		if( fabs( val1 - val2 ) > STYLE_LERPING_THRESHOLD )
 		{
@@ -2481,8 +2471,8 @@ DLIGHT MANAGEMENT
 
 ==============================================================
 */
-dlight_t	cl_dlights[MAX_DLIGHTS];
-dlight_t	cl_elights[MAX_ELIGHTS];
+static dlight_t cl_dlights[MAX_DLIGHTS];
+static dlight_t cl_elights[MAX_ELIGHTS];
 
 /*
 ================

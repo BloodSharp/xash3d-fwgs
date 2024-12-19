@@ -282,6 +282,9 @@ typedef enum bugcomp_e
 
 	// makes sound with no attenuation spatialized, like in GoldSrc
 	BUGCOMP_SPATIALIZE_SOUND_WITH_ATTN_NONE = BIT( 2 ),
+
+	// returns full path to the game directory in server's pfnGetGameDir call
+	BUGCOMP_GET_GAME_DIR_FULL_PATH = BIT( 3 ),
 } bugcomp_t;
 
 typedef struct host_parm_s
@@ -479,6 +482,8 @@ typedef enum
 	WF_UNKNOWN = 0,
 	WF_PCMDATA,
 	WF_MPGDATA,
+	WF_VORBISDATA,
+	WF_OPUSDATA,
 	WF_TOTALCOUNT,	// must be last
 } sndformat_t;
 
@@ -592,7 +597,6 @@ void *Cache_Check( poolhandle_t mempool, struct cache_user_s *c );
 void COM_TrimSpace( const char *source, char *dest );
 void pfnGetModelBounds( model_t *mod, float *mins, float *maxs );
 int COM_CheckParm( char *parm, char **ppnext );
-void pfnGetGameDir( char *szGetGameDir );
 int pfnGetModelType( model_t *mod );
 int pfnIsMapValid( char *filename );
 void Con_Reportf( const char *szFmt, ... ) FORMAT_CHECK( 1 );
@@ -687,7 +691,6 @@ struct sv_client_s;
 typedef struct sizebuf_s sizebuf_t;
 qboolean CL_IsInGame( void );
 qboolean CL_IsInConsole( void );
-qboolean CL_IsThirdPerson( void );
 qboolean CL_IsIntermission( void );
 qboolean CL_Initialized( void );
 char *CL_Userinfo( void );
@@ -773,7 +776,7 @@ void Rcon_Print( host_redirect_t *rd, const char *pMsg );
 qboolean COM_ParseVector( char **pfile, float *v, size_t size );
 int COM_FileSize( const char *filename );
 void COM_FreeFile( void *buffer );
-int COM_CompareFileTime( const char *filename1, const char *filename2, int *iCompare );
+int pfnCompareFileTime( const char *path1, const char *path2, int *retval );
 char *va( const char *format, ... ) FORMAT_CHECK( 1 ) RETURNS_NONNULL;
 qboolean CRC32_MapFile( dword *crcvalue, const char *filename, qboolean multiplayer );
 

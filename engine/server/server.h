@@ -430,6 +430,7 @@ extern convar_t		sv_wateramp;
 extern convar_t		sv_voiceenable;
 extern convar_t		sv_voicequality;
 extern convar_t		sv_maxvelocity;
+extern convar_t		sv_stepsize;
 extern convar_t		sv_skyname;
 extern convar_t		sv_skycolor_r;
 extern convar_t		sv_skycolor_g;
@@ -542,13 +543,24 @@ void SV_ExecuteClientMessage( sv_client_t *cl, sizebuf_t *msg );
 void SV_ConnectionlessPacket( netadr_t from, sizebuf_t *msg );
 edict_t *SV_FakeConnect( const char *netname );
 void SV_BuildReconnect( sizebuf_t *msg );
-qboolean SV_IsPlayerIndex( int idx );
 int SV_CalcPing( sv_client_t *cl );
 void SV_UpdateServerInfo( void );
 void SV_EndRedirect( host_redirect_t *rd );
 void SV_RejectConnection( netadr_t from, const char *fmt, ... ) FORMAT_CHECK( 2 );
 void SV_GetPlayerCount( int *clients, int *bots );
-qboolean SV_HavePassword( void );
+
+static inline qboolean SV_HavePassword( void )
+{
+	if( COM_CheckStringEmpty( sv_password.string ) && Q_stricmp( sv_password.string, "none" ))
+		return true;
+
+	return false;
+}
+
+static inline qboolean SV_IsPlayerIndex( int idx )
+{
+	return idx > 0 && idx <= svs.maxclients ? true : false;
+}
 
 //
 // sv_cmds.c
@@ -581,7 +593,7 @@ qboolean SV_CheckID( const char *id );
 // sv_frame.c
 //
 void SV_InactivateClients( void );
-int SV_FindBestBaselineForStatic( int index, entity_state_t **baseline, entity_state_t *to );
+int SV_FindBestBaseline( int index, entity_state_t **baseline, entity_state_t *to, client_frame_t *frame, qboolean player );
 void SV_SkipUpdates( void );
 
 //
@@ -609,7 +621,7 @@ string_t SV_AllocString( const char *szValue );
 string_t SV_MakeString( const char *szValue );
 const char *SV_GetString( string_t iString );
 void SV_SetStringArrayMode( qboolean dynamic );
-void SV_EmptyStringPool( void );
+void SV_EmptyStringPool( qboolean clear_stats );
 void SV_PrintStr64Stats_f( void );
 sv_client_t *SV_ClientFromEdict( const edict_t *pEdict, qboolean spawned_only );
 uint SV_MapIsValid( const char *filename, const char *landmark_name );

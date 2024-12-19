@@ -32,11 +32,6 @@ double Platform_DoubleTime( void )
 	CurrentTime = SDL_GetPerformanceCounter();
 	return (double)( CurrentTime - g_ClockStart ) / (double)( g_PerformanceFrequency );
 }
-
-void Platform_Sleep( int msec )
-{
-	SDL_Delay( msec );
-}
 #endif // XASH_TIMER == TIMER_SDL
 
 #if XASH_MESSAGEBOX == MSGBOX_SDL
@@ -68,4 +63,6 @@ void SDLash_Init( void )
 void SDLash_Shutdown( void )
 {
 	SDLash_FreeCursors();
+
+	SDL_Quit();
 }

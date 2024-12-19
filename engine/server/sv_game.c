@@ -578,7 +578,7 @@ qboolean SV_CreateStaticEntity( sizebuf_t *msg, int index )
 	state->number = 0;
 
 	// trying to compress with previous delta's
-	offset = SV_FindBestBaselineForStatic( index, &baseline, state );
+	offset = SV_FindBestBaseline( index, &baseline, state, NULL, false );
 
 	MSG_BeginServerCmd( msg, svc_spawnstatic );
 	MSG_WriteDeltaEntity( baseline, state, msg, true, DELTA_STATIC, sv.time, offset );
@@ -1566,21 +1566,6 @@ edict_t *SV_FindGlobalEntity( string_t classname, string_t globalname )
 }
 
 /*
-==============
-pfnGetEntityIllum
-
-returns averaged lightvalue for entity
-==============
-*/
-static int GAME_EXPORT pfnGetEntityIllum( edict_t* pEnt )
-{
-	if( !SV_IsValidEdict( pEnt ))
-		return -1;
-
-	return SV_LightForEntity( pEnt );
-}
-
-/*
 =================
 pfnFindEntityInSphere
 
@@ -2450,10 +2435,17 @@ pfnLightStyle
 */
 static void GAME_EXPORT pfnLightStyle( int style, const char* val )
 {
-	if( style < 0 ) style = 0;
+	if( style < 0 )
+		style = 0;
+
 	if( style >= MAX_LIGHTSTYLES )
+	{
 		Host_Error( "%s: style: %i >= %d", __func__, style, MAX_LIGHTSTYLES );
-	if( sv.loadgame ) return; // don't let the world overwrite our restored styles
+		return;
+	}
+
+	if( sv.loadgame )
+		return; // don't let the world overwrite our restored styles
 
 	SV_SetLightStyle( style, val, 0.0f ); // set correct style
 }
@@ -3009,18 +3001,26 @@ SV_EmptyStringPool
 Free strings on server stop. Reset string pointer on 64 bits
 ==================
 */
-void SV_EmptyStringPool( void )
+void SV_EmptyStringPool( qboolean clear_stats )
 {
 #if XASH_64BIT
 	if( str64.dynamic ) // switch only after array fill (more space for multiplayer games)
+	{
 		str64.pstringbase = str64.pstringarray;
+	}
 	else
 	{
 		str64.pstringbase = str64.poldstringbase = str64.pstringarraystatic;
 		str64.plast = str64.pstringbase + 1;
 	}
-#else // !XASH_64BIT
-	Mem_EmptyPool( svgame.stringspool );
+
+	if( clear_stats )
+	{
+		str64.maxalloc = 0;
+		str64.totalalloc = 0;
+		str64.numdups = 0;
+		str64.numoverflows = 0;
+	}
 #endif // !XASH_64BIT
 }
 
@@ -3043,7 +3043,7 @@ void SV_SetStringArrayMode( qboolean dynamic )
 
 	str64.dynamic = dynamic;
 
-	SV_EmptyStringPool();
+	SV_EmptyStringPool( false );
 #endif // !XASH_64BIT
 }
 
@@ -3069,13 +3069,13 @@ static void SV_AllocStringPool( void )
 	string lenstr;
 
 	Con_Reportf( "%s()\n", __func__ );
-	if( Sys_GetParmFromCmdLine( "-str64alloc", lenstr ) )
+	if( Sys_GetParmFromCmdLine( "-str64alloc", lenstr ))
 	{
 		str64.maxstringarray = Q_atoi( lenstr );
 		if( str64.maxstringarray < 1024 || str64.maxstringarray >= INT_MAX )
-			str64.maxstringarray = 65536;
+			str64.maxstringarray = 65536 * Q_ceil( GI->max_edicts / 1024.0f );
 	}
-	else str64.maxstringarray = 65536;
+	else str64.maxstringarray = 65536 * Q_ceil( GI->max_edicts / 1024.0f );
 	if( Sys_CheckParm( "-str64dup" ) )
 		str64.allowdup = true;
 
@@ -3143,9 +3143,10 @@ static void SV_AllocStringPool( void )
 	str64.plast = (byte*)ptr + 1;
 	svgame.globals->pStringBase = ptr;
 #else // !XASH_64BIT
-	svgame.stringspool = Mem_AllocPool( "Server Strings" );
 	svgame.globals->pStringBase = "";
 #endif // !XASH_64BIT
+
+	svgame.stringspool = Mem_AllocPool( "Server Strings" );
 }
 
 static void SV_FreeStringPool( void )
@@ -3232,38 +3233,33 @@ use -str64dup to disable deduplication, -str64alloc to set array size
 */
 string_t GAME_EXPORT SV_AllocString( const char *szValue )
 {
-	char *newString = NULL;
-	uint len;
-	int cmp;
+	uint len = SV_ProcessString( NULL, szValue );
+	char *processed_string = Mem_Calloc( svgame.stringspool, len );
+	char *dupe_string = NULL;
+	qboolean found_dupe = false;
+
+	(void)dupe_string;
+	(void)found_dupe;
+
+	SV_ProcessString( processed_string, szValue );
 
 	if( svgame.physFuncs.pfnAllocString != NULL )
 	{
-		string_t i;
-
-		newString = Mem_Malloc( host.mempool, SV_ProcessString( NULL, szValue ));
-
-		SV_ProcessString( newString, szValue );
-		i = svgame.physFuncs.pfnAllocString( newString );
-
-		Mem_Free( newString );
-
+		string_t i = svgame.physFuncs.pfnAllocString( processed_string );
+		Mem_Free( processed_string );
 		return i;
 	}
 
 #if XASH_64BIT
-	cmp = 1;
-
 	if( !str64.allowdup )
 	{
-		for( newString = str64.poldstringbase + 1;
-			newString < str64.plast && ( cmp = Q_strcmp( newString, szValue ) );
-			newString += Q_strlen( newString ) + 1 );
+		for( dupe_string = str64.poldstringbase + 1;
+			dupe_string < str64.plast && ( found_dupe = !Q_strcmp( dupe_string, processed_string ));
+			dupe_string += Q_strlen( dupe_string ) + 1 );
 	}
 
-	if( cmp )
+	if( !found_dupe )
 	{
-		uint len = SV_ProcessString( NULL, szValue );
-
 		if( str64.plast - str64.poldstringbase + len + 1 > str64.maxstringarray )
 		{
 			str64.plast = str64.pstringbase + 1;
@@ -3271,29 +3267,27 @@ string_t GAME_EXPORT SV_AllocString( const char *szValue )
 			str64.numoverflows++;
 		}
 
-		//MsgDev( D_NOTE, "SV_AllocString: %ld %s\n", str64.plast - svgame.globals->pStringBase, szValue );
-		SV_ProcessString( str64.plast, szValue );
+		//MsgDev( D_NOTE, "SV_AllocString: %ld %s\n", str64.plast - svgame.globals->pStringBase, processed_string );
+		Q_strncpy( str64.plast, processed_string, len );
 		str64.totalalloc += len;
 
-		newString = str64.plast;
+		dupe_string = str64.plast;
 		str64.plast += len;
 	}
 	else
 	{
 		str64.numdups++;
-		//MsgDev( D_NOTE, "SV_AllocString: dup %ld %s\n", newString - svgame.globals->pStringBase, szValue );
+		//MsgDev( D_NOTE, "SV_AllocString: dup %ld %s\n", dupe_string - svgame.globals->pStringBase, processed_string );
 	}
 
-	if( newString - str64.pstringarray > str64.maxalloc )
-		str64.maxalloc = newString - str64.pstringarray;
+	if( dupe_string - str64.pstringarray > str64.maxalloc )
+		str64.maxalloc = dupe_string - str64.pstringarray;
 
-	return newString - svgame.globals->pStringBase;
+	Mem_Free( processed_string );
+
+	return dupe_string - svgame.globals->pStringBase;
 #else // !XASH_64BIT
-	len = SV_ProcessString( NULL, szValue );
-	newString = Mem_Malloc( svgame.stringspool, len );
-	SV_ProcessString( newString, szValue );
-
-	return newString - svgame.globals->pStringBase;
+	return processed_string - svgame.globals->pStringBase;
 #endif // !XASH_64BIT
 }
 
@@ -3811,8 +3805,12 @@ static void GAME_EXPORT pfnSetClientMaxspeed( const edict_t *pEdict, float fNewM
 	if(( cl = SV_ClientFromEdict( pEdict, false )) == NULL )
 		return;
 
+	// GoldSrc doesn't bound the value to the movevar here
 	fNewMaxspeed = bound( -svgame.movevars.maxspeed, fNewMaxspeed, svgame.movevars.maxspeed );
+
+	// There isn't any reference to "maxspd" anywhere except some commented-out code in SDK
 	Info_SetValueForKeyf( cl->physinfo, "maxspd", MAX_INFO_STRING, "%.f", fNewMaxspeed );
+
 	cl->edict->v.maxspeed = fNewMaxspeed;
 }
 
@@ -4629,6 +4627,30 @@ static int GAME_EXPORT pfnGetTimesTutorMessageShown( int mid )
 	return 0;
 }
 
+static void GAME_EXPORT pfnGetGameDir( char *out )
+{
+	char rootdir[MAX_SYSPATH];
+
+	if( !out )
+		return;
+
+	if( !FBitSet( host.bugcomp, BUGCOMP_GET_GAME_DIR_FULL_PATH ))
+	{
+		Q_strncpy( out, GI->gamefolder, 256 );
+	}
+	else
+	{
+		// in GoldSrc pre-1.1.1.1, it's a full path to game directory, limited by 256 characters
+		// however the full path might easily overflow that limitation
+		// here we check if it would overflow and just return game folder in that case
+		if( !g_fsapi.GetRootDirectory( rootdir, sizeof( rootdir ))
+			|| Q_snprintf( out, 256, "%s/%s", rootdir, GI->gamefolder ) < 0 )
+		{
+			Q_strncpy( out, GI->gamefolder, 256 );
+		}
+	}
+}
+
 // engine callbacks
 static enginefuncs_t gEngfuncs =
 {
@@ -4647,7 +4669,7 @@ static enginefuncs_t gEngfuncs =
 	pfnChangeYaw,
 	pfnChangePitch,
 	SV_FindEntityByString,
-	pfnGetEntityIllum,
+	SV_LightForEntity,
 	pfnFindEntityInSphere,
 	pfnFindClientInPVS,
 	pfnEntitiesInPVS,
@@ -4730,7 +4752,7 @@ static enginefuncs_t gEngfuncs =
 	COM_LoadFileForMe,
 	COM_FreeFile,
 	pfnEndSection,
-	COM_CompareFileTime,
+	pfnCompareFileTime,
 	pfnGetGameDir,
 	pfnCvar_RegisterEngineVariable,
 	pfnFadeClientVolume,
@@ -5116,7 +5138,6 @@ void SV_UnloadProgs( void )
 
 	// now we can unload cvars
 	Cvar_FullSet( "host_gameloaded", "0", FCVAR_READ_ONLY );
-	Cvar_FullSet( "sv_background", "0", FCVAR_READ_ONLY );
 
 	// free entity baselines
 	Z_Free( svs.static_entities );
@@ -5153,13 +5174,7 @@ qboolean SV_LoadProgs( const char *name )
 	edict_t			*e;
 
 	if( svgame.hInstance )
-	{
-#if XASH_WIN32
-		SV_UnloadProgs();
-#else // XASH_WIN32
 		return true;
-#endif // XASH_WIN32
-	}
 
 	// fill it in
 	svgame.pmove = &gpMove;

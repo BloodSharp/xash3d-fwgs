@@ -75,6 +75,7 @@ static const feature_message_t bugcomp_features[] =
 { BUGCOMP_PENTITYOFENTINDEX_FLAG, "pfnPEntityOfEntIndex bugfix revert", "peoei" },
 { BUGCOMP_MESSAGE_REWRITE_FACILITY_FLAG, "GoldSrc Message Rewrite Facility", "gsmrf" },
 { BUGCOMP_SPATIALIZE_SOUND_WITH_ATTN_NONE, "spatialize sounds with zero attenuation", "sp_attn_none" },
+{ BUGCOMP_GET_GAME_DIR_FULL_PATH, "Return full path in GET_GAME_DIR()", "get_game_dir_full" }
 };
 
 static const feature_message_t engine_features[] =
@@ -91,13 +92,17 @@ static const feature_message_t engine_features[] =
 { ENGINE_STEP_POSHISTORY_LERP, "MOVETYPE_STEP Position History Based Lerping" },
 };
 
+static void Sys_MakeVersionString( char *out, size_t len )
+{
+	Q_snprintf( out, len, XASH_ENGINE_NAME " %i/" XASH_VERSION " (%s-%s build %i)", PROTOCOL_VERSION, Q_buildos(), Q_buildarch(), Q_buildnum( ));
+}
+
 static void Sys_PrintUsage( const char *exename )
 {
 	string version_str;
 	const char *usage_str;
 
-	Q_snprintf( version_str, sizeof( version_str ),
-		XASH_ENGINE_NAME " %i/" XASH_VERSION " (%s-%s build %i)", PROTOCOL_VERSION, Q_buildos(), Q_buildarch(), Q_buildnum( ));
+	Sys_MakeVersionString( version_str, sizeof( version_str ));
 
 #if XASH_MESSAGEBOX != MSGBOX_STDERR
 	#if XASH_WIN32
@@ -108,87 +113,118 @@ static void Sys_PrintUsage( const char *exename )
 #else
 	#define XASH_EXE "%s"
 #endif
-
 #define O( x, y ) "  "x"  "y"\n"
 
 	usage_str = S_USAGE XASH_EXE " [options] [+command] [+command2 arg] ...\n"
 
 "\nCommon options:\n"
-	O("-dev [level]     ", "set log verbosity 0-2")
-	O("-log             ", "write log to \"engine.log\"")
-	O("-nowriteconfig   ", "disable config save")
-	O("-noch            ", "disable crashhandler")
+	O("-dev [level]       ", "set log verbosity 0-2")
+	O("-log               ", "write log to \"engine.log\"")
+	O("-nowriteconfig     ", "disable config save")
+	O("-noch              ", "disable crashhandler")
 #if XASH_WIN32 // !!!!
-	O("-minidumps       ", "enable writing minidumps when game is crashed")
+	O("-minidumps         ", "enable writing minidumps when game is crashed")
 #endif
-	O("-rodir <path>    ", "set read-only base directory")
-	O("-bugcomp [opts]  ", "enable precise bug compatibility")
-	O("                 ", "will break games that don't require it")
-	O("                 ", "refer to engine documentation for more info")
-	O("-disablehelp     ", "disable this message")
+	O("-rodir <path>      ", "set read-only base directory")
+	O("-bugcomp [opts]    ", "enable precise bug compatibility")
+	O("                   ", "will break games that don't require it")
+	O("                   ", "refer to engine documentation for more info")
+	O("-disablehelp       ", "disable this message")
 #if !XASH_DEDICATED
-	O("-dedicated       ", "run engine in dedicated mode")
+	O("-dedicated         ", "run engine in dedicated mode")
 #endif
 
 "\nNetworking options:\n"
-	O("-noip            ", "disable IPv4")
-	O("-ip <ip>         ", "set IPv4 address")
-	O("-port <port>     ", "set IPv4 port")
-	O("-noip6           ", "disable IPv6")
-	O("-ip6 <ip>        ", "set IPv6 address")
-	O("-port6 <port>    ", "set IPv6 port")
-	O("-clockwindow <cw>", "adjust clockwindow used to ignore client commands")
-	O("                 ", "to prevent speed hacks")
+	O("-noip              ", "disable IPv4")
+	O("-ip <ip>           ", "set IPv4 address")
+	O("-port <port>       ", "set IPv4 port")
+#if !XASH_DEDICATED
+	O("-clientport <port> ", "set IPv4 client port")
+#endif
+	O("-noip6             ", "disable IPv6")
+	O("-ip6 <ip>          ", "set IPv6 address")
+	O("-port6 <port>      ", "set IPv6 port")
+#if !XASH_DEDICATED
+	O("-clientport6 <port>", "set IPv6 client port")
+#endif
+	O("-clockwindow <cw>  ", "adjust clockwindow used to ignore client commands")
+	O("                   ", "to prevent speed hacks")
 
 "\nGame options:\n"
-	O("-game <directory>", "set game directory to start engine with")
-	O("-dll <path>      ", "override server DLL path")
+	O("-game <directory>  ", "set game directory to start engine with")
+	O("-dll <path>        ", "override server DLL path")
 #if !XASH_DEDICATED
-	O("-clientlib <path>", "override client DLL path")
-	O("-console         ", "run engine with console enabled")
-	O("-toconsole       ", "run engine witn console open")
-	O("-oldfont         ", "enable unused Quake font in Half-Life")
-	O("-width <n>       ", "set window width")
-	O("-height <n>      ", "set window height")
-	O("-borderless      ", "run engine in fullscreen borderless mode")
-	O("-fullscreen      ", "run engine in fullscreen mode")
-	O("-windowed        ", "run engine in windowed mode")
-	O("-ref <name>      ", "use selected renderer dll")
-	O("-gldebug         ", "enable OpenGL debug log")
+	O("-clientlib <path>  ", "override client DLL path")
+	O("-console           ", "run engine with console enabled")
+	O("-toconsole         ", "run engine witn console open")
+	O("-oldfont           ", "enable unused Quake font in Half-Life")
+	O("-width <n>         ", "set window width")
+	O("-height <n>        ", "set window height")
+	O("-borderless        ", "run engine in fullscreen borderless mode")
+	O("-fullscreen        ", "run engine in fullscreen mode")
+	O("-windowed          ", "run engine in windowed mode")
+	O("-ref <name>        ", "use selected renderer dll")
+	O("-gldebug           ", "enable OpenGL debug log")
 #if XASH_WIN32
-	O("-noavi           ", "disable AVI support")
-	O("-nointro         ", "disable intro video")
+	O("-noavi             ", "disable AVI support")
+	O("-nointro           ", "disable intro video")
 #endif
-	O("-noenginejoy     ", "disable engine builtin joystick support")
-	O("-noenginemouse   ", "disable engine builtin mouse support")
-	O("-nosound         ", "disable sound output")
-	O("-timedemo        ", "run timedemo and exit")
+	O("-noenginejoy       ", "disable engine builtin joystick support")
+	O("-noenginemouse     ", "disable engine builtin mouse support")
+	O("-nosound           ", "disable sound output")
+	O("-timedemo          ", "run timedemo and exit")
 #endif
 
 "\nPlatform-specific options:\n"
 #if !XASH_MOBILE_PLATFORM
-	O("-daemonize       ", "run engine as a daemon")
+	O("-daemonize         ", "run engine as a daemon")
 #endif
 #if XASH_SDL == 2
-	O("-sdl_joy_old_api ","use SDL legacy joystick API")
-	O("-sdl_renderer <n>","use alternative SDL_Renderer for software")
+	O("-sdl_joy_old_api   ","use SDL legacy joystick API")
+	O("-sdl_renderer <n>  ","use alternative SDL_Renderer for software")
 #endif // XASH_SDL
 #if XASH_ANDROID && !XASH_SDL
-	O("-nativeegl       ","use native egl implementation. Use if screen does not update or black")
+	O("-nativeegl         ","use native egl implementation. Use if screen does not update or black")
 #endif // XASH_ANDROID
 #if XASH_DOS
-	O("-novesa          ","disable vesa")
+	O("-novesa            ","disable vesa")
 #endif // XASH_DOS
 #if XASH_VIDEO == VIDEO_FBDEV
-	O("-fbdev <path>    ","open selected framebuffer")
-	O("-ttygfx          ","set graphics mode in tty")
-	O("-doublebuffer    ","enable doublebuffering")
+	O("-fbdev <path>      ","open selected framebuffer")
+	O("-ttygfx            ","set graphics mode in tty")
+	O("-doublebuffer      ","enable doublebuffering")
 #endif // XASH_VIDEO == VIDEO_FBDEV
 #if XASH_SOUND == SOUND_ALSA
-	O("-alsadev <dev>   ","open selected ALSA device")
+	O("-alsadev <dev>     ","open selected ALSA device")
 #endif // XASH_SOUND == SOUND_ALSA
 	;
 #undef O
+#undef XASH_EXE
+
+	// HACKHACK: pretty output in dedicated
+#if XASH_MESSAGEBOX != MSGBOX_STDERR
+	Platform_MessageBox( version_str, usage_str, false );
+#else
+	fprintf( stderr, "%s\n", version_str );
+	fprintf( stderr, usage_str, exename );
+#endif
+
+	Sys_Quit();
+}
+
+static void Sys_PrintBugcompUsage( const char *exename )
+{
+	string version_str;
+	char usage_str[4096];
+	char *p = usage_str;
+	int i;
+
+	Sys_MakeVersionString( version_str, sizeof( version_str ));
+
+	p += Q_snprintf( p, sizeof( usage_str ) - ( usage_str - p ), "Known bugcomp flags are:\n" );
+	for( i = 0; i < ARRAYSIZE( bugcomp_features ); i++ )
+		p += Q_snprintf( p, sizeof( usage_str ) - ( usage_str - p ), "   %s: %s\n", bugcomp_features[i].arg, bugcomp_features[i].msg );
+	p += Q_snprintf( p, sizeof( usage_str ) - ( usage_str - p ), "\nIt is possible to combine multiple flags with '+' characters.\nExample: -bugcomp flag1+flag2+flag3...\n" );
 
 	// HACKHACK: pretty output in dedicated
 #if XASH_MESSAGEBOX != MSGBOX_STDERR
@@ -646,10 +682,10 @@ static qboolean Host_Autosleep( double dt, double scale )
 			// if we have allocated time window, try to sleep
 			if( timewindow > realsleeptime )
 			{
-				// Sys_Sleep isn't guaranteed to sleep an exact amount of milliseconds
+				// Platform_Sleep isn't guaranteed to sleep an exact amount of milliseconds
 				// so we measure the real sleep time and use it to decrease the window
 				double t1 = Sys_DoubleTime(), t2;
-				Sys_Sleep( sleep ); // in msec!
+				Platform_Sleep( sleep ); // in msec!
 				t2 = Sys_DoubleTime();
 				realsleeptime = t2 - t1;
 
@@ -889,41 +925,47 @@ static void Host_RunTests( int stage )
 }
 #endif
 
+static int Host_CheckBugcomp_splitstr_handler( char *prev, char *next, void *userdata )
+{
+	size_t i;
+	uint32_t *flags = userdata;
+
+	*next = '\0';
+
+	if( !COM_CheckStringEmpty( prev ))
+		return 0;
+
+	for( i = 0; i < ARRAYSIZE( bugcomp_features ); i++ )
+	{
+		if( !Q_stricmp( bugcomp_features[i].arg, prev ))
+		{
+			SetBits( *flags, bugcomp_features[i].mask );
+			break;
+		}
+	}
+
+	if( i == ARRAYSIZE( bugcomp_features ))
+	{
+		Con_Printf( S_ERROR "Unknown bugcomp flag %s\n", prev );
+		Con_Printf( "Valid flags are:\n" );
+		for( i = 0; i < ARRAYSIZE( bugcomp_features ); i++ )
+			Con_Printf( "\t%s: %s\n", bugcomp_features[i].arg, bugcomp_features[i].msg );
+	}
+
+	return 0;
+}
+
 static uint32_t Host_CheckBugcomp( void )
 {
-	const char *prev, *next;
 	uint32_t flags = 0;
-	string args, arg;
-	size_t i;
+	string args;
 
 	if( !Sys_CheckParm( "-bugcomp" ))
 		return 0;
 
 	if( Sys_GetParmFromCmdLine( "-bugcomp", args ) && isalpha( args[0] ))
 	{
-		for( prev = args, next = Q_strchrnul( prev, '+' ); ; prev = next + 1, next = Q_strchrnul( prev, '+' ))
-		{
-			Q_strncpy( arg, prev, next - prev + 1 );
-			for( i = 0; i < ARRAYSIZE( bugcomp_features ); i++ )
-			{
-				if( !Q_stricmp( bugcomp_features[i].arg, arg ))
-				{
-					SetBits( flags, bugcomp_features[i].mask );
-					break;
-				}
-			}
-
-			if( i == ARRAYSIZE( bugcomp_features ))
-			{
-				Con_Printf( S_ERROR "Unknown bugcomp flag %s\n", arg );
-				Con_Printf( "Valid flags are:\n" );
-				for( i = 0; i < ARRAYSIZE( bugcomp_features ); i++ )
-					Con_Printf( "\t%s: %s\n", bugcomp_features[i].arg, bugcomp_features[i].msg );
-			}
-
-			if( !*next )
-				break;
-		}
+		Q_splitstr( args, '+', &flags, Host_CheckBugcomp_splitstr_handler );
 	}
 	else
 	{
@@ -970,8 +1012,13 @@ static void Host_InitCommon( int argc, char **argv, const char *progname, qboole
 
 	if( !Sys_CheckParm( "-disablehelp" ))
 	{
+		string arg;
+
 		if( Sys_CheckParm( "-help" ) || Sys_CheckParm( "-h" ) || Sys_CheckParm( "--help" ))
 			Sys_PrintUsage( exename );
+
+		if( Sys_GetParmFromCmdLine( "-bugcomp", arg ) && !Q_stricmp( arg, "help" ))
+			Sys_PrintBugcompUsage( exename );
 	}
 
 	if( !Sys_CheckParm( "-noch" ))

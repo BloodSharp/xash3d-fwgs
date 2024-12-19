@@ -2,7 +2,7 @@
 # encoding: utf-8
 # a1batross, mittorn, 2018
 
-from waflib import Build, Context, Logs
+from waflib import Build, Context, Logs, TaskGen
 from waflib.Tools import waf_unit_test, c_tests
 import sys
 import os
@@ -16,6 +16,21 @@ Context.Context.line_just = 55 # should fit for everything on 80x26
 
 c_tests.LARGE_FRAGMENT='''#include <unistd.h>
 int check[sizeof(off_t) >= 8 ? 1 : -1]; int main(void) { return 0; }'''
+
+@TaskGen.feature('cshlib', 'cxxshlib', 'fcshlib')
+@TaskGen.before_method('apply_implib')
+def remove_implib_install(self):
+	if not getattr(self, 'install_path_implib', None):
+		self.install_path_implib = None
+
+@TaskGen.feature('cprogram', 'cxxprogram')
+@TaskGen.before_method('apply_flags_msvc')
+def apply_subsystem_msvc(self):
+	if getattr(self, 'subsystem', None):
+		return # have custom subsystem
+
+	if 'test' in self.features:
+		self.subsystem = self.env.CONSOLE_SUBSYSTEM
 
 class Subproject:
 	def __init__(self, name, fnFilter = None):
@@ -79,6 +94,10 @@ SUBDIRS = [
 	Subproject('ref/soft',              lambda x: not x.env.DEDICATED and not x.env.SUPPORT_BSP2_FORMAT and x.env.SOFT),
 	Subproject('ref/null',              lambda x: not x.env.DEDICATED and x.env.NULL),
 	Subproject('3rdparty/bzip2',        lambda x: not x.env.DEDICATED and not x.env.HAVE_SYSTEM_BZ2),
+	Subproject('3rdparty/opus',         lambda x: not x.env.DEDICATED and not x.env.HAVE_SYSTEM_OPUS),
+	Subproject('3rdparty/libogg',       lambda x: not x.env.DEDICATED and not x.env.HAVE_SYSTEM_OGG),
+	Subproject('3rdparty/vorbis',       lambda x: not x.env.DEDICATED and (not x.env.HAVE_SYSTEM_VORBIS or not x.env.HAVE_SYSTEM_VORBISFILE)),
+	Subproject('3rdparty/opusfile',     lambda x: not x.env.DEDICATED and not x.env.HAVE_SYSTEM_OPUSFILE),
 	Subproject('3rdparty/mainui',       lambda x: not x.env.DEDICATED),
 	Subproject('3rdparty/vgui_support', lambda x: not x.env.DEDICATED),
 	Subproject('3rdparty/MultiEmulator',lambda x: not x.env.DEDICATED),
@@ -86,9 +105,6 @@ SUBDIRS = [
 	Subproject('stub/client',           lambda x: not x.env.DEDICATED),
 	Subproject('game_launch',           lambda x: not x.env.DISABLE_LAUNCHER),
 	Subproject('engine'), # keep latest for static linking
-
-	# disable only by external dependency presense
-	Subproject('3rdparty/opus', lambda x: not x.env.HAVE_SYSTEM_OPUS and not x.env.DEDICATED),
 
 	# enabled optionally
 	Subproject('utils/mdldec',     lambda x: x.env.ENABLE_UTILS),
@@ -185,7 +201,7 @@ def configure(conf):
 		conf.env.MSVC_TARGETS = ['x86']
 
 	# Load compilers early
-	conf.load('xshlib xcompile compiler_c compiler_cxx cmake gccdeps')
+	conf.load('xshlib xcompile compiler_c compiler_cxx gccdeps')
 
 	if conf.options.NSWITCH:
 		conf.load('nswitch')
@@ -202,7 +218,6 @@ def configure(conf):
 
 	conf.load('msvs msdev subproject clang_compilation_database strip_on_install waf_unit_test enforce_pic cmake force_32bit')
 
-	# Force XP compatibility, all build targets should add subsystem=bld.env.MSVC_SUBSYSTEM
 	if conf.env.MSVC_TARGETS[0] == 'amd64_x86' or conf.env.MSVC_TARGETS[0] == 'x86':
 		conf.env.MSVC_SUBSYSTEM = 'WINDOWS,5.01'
 		conf.env.CONSOLE_SUBSYSTEM = 'CONSOLE,5.01'
@@ -455,9 +470,15 @@ def configure(conf):
 	else:
 		conf.env.SHAREDIR = conf.env.LIBDIR = conf.env.BINDIR = conf.env.PREFIX
 
-	if not conf.options.BUILD_BUNDLED_DEPS:
-		# search for opus 1.4 or higher, it has fixes for custom modes
-		if conf.check_cfg(package='opus', uselib_store='opus', args='opus >= 1.4 --cflags --libs', mandatory=False):
+	# dedicated server don't have external dependencies
+	if not conf.options.BUILD_BUNDLED_DEPS and not conf.options.DEDICATED:
+		for i in ('ogg','opusfile','vorbis','vorbisfile'):
+			if conf.check_cfg(package=i, uselib_store=i, args='--cflags --libs', mandatory=False):
+				conf.env['HAVE_SYSTEM_%s' % i.upper()] = True
+
+		# search for opus 1.4 only, it has fixes for custom modes
+		# 1.5 breaks custom modes: https://github.com/xiph/opus/issues/374
+		if conf.check_cfg(package='opus', uselib_store='opus', args='opus = 1.4 --cflags --libs', mandatory=False):
 			# now try to link with export that only exists with CUSTOM_MODES defined
 			frag='''#include <opus_custom.h>
 int main(void) { return !opus_custom_encoder_init((OpusCustomEncoder *)1, (const OpusCustomMode *)1, 1); }'''

@@ -311,10 +311,13 @@ static client entity
 static void CL_ParseStaticEntity( sizebuf_t *msg )
 {
 	int		i, newnum;
-	entity_state_t	from, to;
+	const entity_state_t from = { 0 };
+	entity_state_t to;
 	cl_entity_t	*ent;
 
-	memset( &from, 0, sizeof( from ));
+	if( !clgame.static_entities )
+		clgame.static_entities = Mem_Calloc( clgame.mempool, sizeof( cl_entity_t ) * MAX_STATIC_ENTITIES );
+
 	newnum = MSG_ReadUBitLong( msg, MAX_ENTITY_BITS );
 	MSG_ReadDeltaEntity( msg, &from, &to, 0, DELTA_STATIC, cl.mtime[0] );
 
@@ -951,7 +954,7 @@ void CL_ParseServerData( sizebuf_t *msg, connprotocol_t proto )
 		Q_strncpy( clgame.maptitle, MSG_ReadString( msg ), sizeof( clgame.maptitle ));
 		background = MSG_ReadOneBit( msg );
 		Q_strncpy( gamefolder, MSG_ReadString( msg ), sizeof( gamefolder ));
-		Host_ValidateEngineFeatures( 0, MSG_ReadDword( msg ));
+		Host_ValidateEngineFeatures( mask, MSG_ReadDword( msg ));
 
 		if( proto != PROTO_LEGACY )
 		{
@@ -1593,17 +1596,23 @@ collect pings and packet lossage from clients
 */
 void CL_UpdateUserPings( sizebuf_t *msg )
 {
-	int		i, slot;
-	player_info_t	*player;
-
-	for( i = 0; i < MAX_CLIENTS; i++ )
+	// a1ba: there was a MAX_PLAYERS check but it doesn't make sense
+	// because pings message always ends by null bit
+	while( 1 )
 	{
-		if( !MSG_ReadOneBit( msg )) break; // end of message
+		int slot;
+		player_info_t *player;
+
+		if( !MSG_ReadOneBit( msg ))
+			break; // end of message
 
 		slot = MSG_ReadUBitLong( msg, MAX_CLIENT_BITS );
 
-		if( slot >= MAX_CLIENTS )
+		if( unlikely( slot >= MAX_CLIENTS ))
+		{
 			Host_Error( "%s: svc_pings > MAX_CLIENTS\n", __func__ );
+			return;
+		}
 
 		player = &cl.players[slot];
 		player->ping = MSG_ReadUBitLong( msg, 12 );

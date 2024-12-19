@@ -863,7 +863,8 @@ qboolean NET_CompareAdr( const netadr_t a, const netadr_t b )
 	if( a.type6 == NA_IP6 )
 	{
 		if( a.port == b.port && !NET_NetadrIP6Compare( &a, &b ))
-		    return true;
+			return true;
+		return false;
 	}
 
 	Con_DPrintf( S_ERROR "%s: bad address type\n", __func__ );
@@ -1522,7 +1523,7 @@ static int NET_SendLong( netsrc_t sock, int net_socket, const char *buf, size_t 
 				total_sent += size;
 			len -= size;
 			packet_number++;
-			Sys_Sleep( 1 );
+			Platform_Sleep( 1 );
 		}
 
 		return total_sent;
@@ -2056,7 +2057,7 @@ void NET_Init( void )
 	}
 
 #if XASH_WIN32
-	if( WSAStartup( MAKEWORD( 1, 1 ), &net.winsockdata ))
+	if( WSAStartup( MAKEWORD( 2, 0 ), &net.winsockdata ))
 	{
 		Con_DPrintf( S_ERROR "network initialization failed.\n" );
 		return;
@@ -2072,23 +2073,31 @@ void NET_Init( void )
 
 	// specify custom host port
 	if( Sys_GetParmFromCmdLine( "-port", cmd ) && Q_isdigit( cmd ))
-		Cvar_FullSet( "hostport", cmd, FCVAR_READ_ONLY );
+		Cvar_FullSet( net_hostport.name, cmd, net_hostport.flags );
 
 	// specify custom IPv6 host port
 	if( Sys_GetParmFromCmdLine( "-port6", cmd ) && Q_isdigit( cmd ))
-		Cvar_FullSet( "ip6_hostport", cmd, FCVAR_READ_ONLY );
+		Cvar_FullSet( net_ip6hostport.name, cmd, net_ip6hostport.flags );
+
+	// specify custom client port
+	if( Sys_GetParmFromCmdLine( "-clientport", cmd ) && Q_isdigit( cmd ))
+		Cvar_FullSet( net_clientport.name, cmd, net_clientport.flags );
+
+	// specify custom IPv6 client port
+	if( Sys_GetParmFromCmdLine( "-clientport6", cmd ) && Q_isdigit( cmd ))
+		Cvar_FullSet( net_ip6clientport.name, cmd, net_ip6clientport.flags );
 
 	// specify custom ip
 	if( Sys_GetParmFromCmdLine( "-ip", cmd ))
-		Cvar_FullSet( "ip", cmd, net_ipname.flags );
+		Cvar_DirectSet( &net_ipname, cmd );
 
 	// specify custom ip6
 	if( Sys_GetParmFromCmdLine( "-ip6", cmd ))
-		Cvar_FullSet( "ip6", cmd, net_ip6name.flags );
+		Cvar_DirectSet( &net_ip6name, cmd );
 
 	// adjust clockwindow
 	if( Sys_GetParmFromCmdLine( "-clockwindow", cmd ))
-		Cvar_SetValue( "clockwindow", Q_atof( cmd ));
+		Cvar_DirectSetValue( &net_clockwindow, Q_atof( cmd ));
 
 	net.sequence_number = 1;
 	net.initialized = true;

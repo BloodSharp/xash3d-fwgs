@@ -48,20 +48,6 @@ static void SV_ExecuteClientCommand( sv_client_t *cl, const char *s );
 
 /*
 =================
-SV_HavePassword
-
-=================
-*/
-qboolean SV_HavePassword( void )
-{
-	if( COM_CheckStringEmpty( sv_password.string ) && Q_stricmp( sv_password.string, "none" ))
-		return true;
-
-	return false;
-}
-
-/*
-=================
 SV_GetPlayerCount
 
 =================
@@ -784,27 +770,21 @@ Returns a pointer to a static char for most likely only printing.
 */
 const char *SV_GetClientIDString( sv_client_t *cl )
 {
-	static char	result[MAX_QPATH];
+	static char result[MAX_QPATH];
 
-	if( !cl ) return "";
+	if( !cl )
+		return "";
 
 	if( FBitSet( cl->flags, FCL_FAKECLIENT ))
-	{
-		Q_strncpy( result, "ID_BOT", sizeof( result ));
-	}
-	else if( NET_IsLocalAddress( cl->netchan.remote_address ))
-	{
-		Q_strncpy( result, "ID_LOOPBACK", sizeof( result ));
-	}
-	else if( sv_lan.value )
-	{
-		Q_strncpy( result, "ID_LAN", sizeof( result ));
-	}
-	else
-	{
-		Q_snprintf( result, sizeof( result ), "ID_%s", MD5_Print( (byte *)cl->hashedcdkey ));
-	}
+		return "ID_BOT";
 
+	if( NET_IsLocalAddress( cl->netchan.remote_address ))
+		return "ID_LOOPBACK";
+
+	if( sv_lan.value )
+		return "ID_LAN";
+
+	Q_snprintf( result, sizeof( result ), "ID_%s", MD5_Print( (byte *)cl->hashedcdkey ));
 	return result;
 }
 
@@ -1371,19 +1351,6 @@ qboolean SV_ShouldUpdatePing( sv_client_t *cl )
 
 	// they are viewing the scoreboard.  Send them pings.
 	return FBitSet( cl->lastcmd.buttons, IN_SCORE ) ? true : false;
-}
-
-/*
-===================
-SV_IsPlayerIndex
-
-===================
-*/
-qboolean SV_IsPlayerIndex( int idx )
-{
-	if( idx > 0 && idx <= svs.maxclients )
-		return true;
-	return false;
 }
 
 /*

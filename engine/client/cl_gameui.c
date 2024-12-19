@@ -1167,6 +1167,14 @@ static void GAME_EXPORT pfnSetCursor( void *hCursor )
 	Platform_SetCursorType( cursor );
 }
 
+static void GAME_EXPORT pfnGetGameDir( char *out )
+{
+	if( !out )
+		return;
+
+	Q_strncpy( out, GI->gamefolder, sizeof( GI->gamefolder ));
+}
+
 // engine callbacks
 static const ui_enginefuncs_t gEngfuncs =
 {
@@ -1249,7 +1257,7 @@ static const ui_enginefuncs_t gEngfuncs =
 	pfnSetCursor,
 	pfnIsMapValid,
 	GL_ProcessTexture,
-	COM_CompareFileTime,
+	pfnCompareFileTime,
 	VID_GetModeString,
 	(void*)COM_SaveFile,
 	pfnDelete

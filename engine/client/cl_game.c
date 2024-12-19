@@ -98,53 +98,6 @@ static void pfnSPR_DrawHoles( int frame, int x, int y, const wrect_t *prc );
 
 /*
 ====================
-CL_GetEntityByIndex
-
-Render callback for studio models
-====================
-*/
-cl_entity_t *CL_GetEntityByIndex( int index )
-{
-	if( !clgame.entities ) // not in game yet
-		return NULL;
-
-	if( index < 0 || index >= clgame.maxEntities )
-		return NULL;
-
-	if( index == 0 )
-		return clgame.entities;
-
-	return CL_EDICT_NUM( index );
-}
-
-/*
-================
-CL_ModelHandle
-
-get model handle by index
-================
-*/
-model_t *CL_ModelHandle( int modelindex )
-{
-	if( modelindex < 0 || modelindex >= MAX_MODELS )
-		return NULL;
-	return cl.models[modelindex];
-}
-
-/*
-====================
-CL_IsThirdPerson
-
-returns true if thirdperson is enabled
-====================
-*/
-qboolean CL_IsThirdPerson( void )
-{
-	return clgame.dllFuncs.CL_IsThirdPerson() ? true : false;
-}
-
-/*
-====================
 CL_CreatePlaylist
 
 Create a default valve playlist
@@ -735,23 +688,6 @@ void CL_ParseFinaleCutscene( sizebuf_t *msg, int level )
 
 /*
 ====================
-CL_GetLocalPlayer
-
-Render callback for studio models
-====================
-*/
-cl_entity_t *CL_GetLocalPlayer( void )
-{
-	cl_entity_t	*player;
-
-	player = CL_EDICT_NUM( cl.playernum + 1 );
-	Assert( player != NULL );
-
-	return player;
-}
-
-/*
-====================
 CL_GetMaxlients
 
 Render callback for studio models
@@ -1016,7 +952,11 @@ void CL_DrawHUD( int state )
 		CL_DrawCenterPrint ();
 		clgame.dllFuncs.pfnRedraw( cl.time, cl.intermission );
 		if( showpause.value )
-			CL_DrawLoadingOrPaused( cls.pauseIcon );
+		{
+			if( !cls.pauseIcon )
+				cls.pauseIcon = SCR_LoadPauseIcon();
+			CL_DrawLoadingOrPaused( Q_max( 0, cls.pauseIcon ));
+		}
 		break;
 	case CL_LOADING:
 		CL_DrawLoadingOrPaused( cls.loadingBar );
@@ -1106,7 +1046,7 @@ void CL_InitEdicts( int maxclients )
 	cls.num_client_entities = CL_UPDATE_BACKUP * NUM_PACKET_ENTITIES;
 	cls.packet_entities = Mem_Realloc( clgame.mempool, cls.packet_entities, sizeof( entity_state_t ) * cls.num_client_entities );
 	clgame.entities = Mem_Calloc( clgame.mempool, sizeof( cl_entity_t ) * clgame.maxEntities );
-	clgame.static_entities = Mem_Calloc( clgame.mempool, sizeof( cl_entity_t ) * MAX_STATIC_ENTITIES );
+	clgame.static_entities = NULL; // will be initialized later
 	clgame.numStatics = 0;
 
 	if(( clgame.maxRemapInfos - 1 ) != clgame.maxEntities )
@@ -2422,7 +2362,7 @@ static void GAME_EXPORT pfnKillEvents( int entnum, const char *eventname )
 	if( eventIndex >= MAX_EVENTS )
 		return;
 
-	if( entnum < 0 || entnum > clgame.maxEntities )
+	if( entnum < 0 || entnum >= clgame.maxEntities )
 		return;
 
 	es = &cl.events;
@@ -2697,7 +2637,7 @@ pfnGetMovevars
 
 =============
 */
-movevars_t *pfnGetMoveVars( void )
+static movevars_t *pfnGetMoveVars( void )
 {
 	return &clgame.movevars;
 }

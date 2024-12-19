@@ -405,7 +405,7 @@ static mip_t *Mod_GetMipTexForTexture( dbspmodel_t *bmod, int i )
 }
 
 // Returns index of WAD that texture was found in, or -1 if not found.
-static int Mod_FindTextureInWadList( wadlist_t *list, const char *name, char *dst, size_t size )
+static int Mod_LoadTextureFromWadList( wadlist_t *list, const char *name, rgbdata_t **pic, char *texpath, size_t texpathlen )
 {
 	int i;
 
@@ -415,16 +415,38 @@ static int Mod_FindTextureInWadList( wadlist_t *list, const char *name, char *ds
 	// check wads in reverse order
 	for( i = list->count - 1; i >= 0; i-- )
 	{
-		char path[MAX_VA_STRING];
+		searchpath_t *sp = NULL;
 
-		Q_snprintf( path, sizeof( path ), "%s.wad/%s.mip", list->wadnames[i], name );
-
-		if( FS_FileExists( path, false ))
+		while(( sp = g_fsapi.GetArchiveByName( list->wadnames[i], sp )))
 		{
-			if( dst && size > 0 )
-				Q_strncpy( dst, path, size );
+			fs_offset_t len;
+			byte *buf;
+			char file[MAX_VA_STRING];
+			int pack_ind;
 
-			return i;
+			Q_snprintf( file, sizeof( file ), "%s.mip", name );
+			pack_ind = g_fsapi.FindFileInArchive( sp, file, NULL, 0 );
+
+			if( pack_ind < 0 )
+				continue;
+
+			if( texpath != NULL )
+				Q_snprintf( texpath, texpathlen, "%s/%s.mip", list->wadnames[i], name );
+
+			if( pic == NULL )
+				return i; // dedicated server don't want to load the textures (why?)
+
+			if( !( buf = g_fsapi.LoadFileFromArchive( sp, file, pack_ind, &len, false )))
+			{
+				*pic = NULL;
+				return i; // corrupted file, don't ignore it
+			}
+
+			// tell imagelib to directly load this texture to save time
+			Q_snprintf( file, sizeof( file ), "#%s/%s.mip", list->wadnames[i], name );
+			*pic = FS_LoadImage( file, buf, len );
+			Mem_Free( buf );
+			return i; // if file is corrupted, it's fine, we want to tell the user about it
 		}
 	}
 
@@ -878,8 +900,6 @@ Mod_FatPVS_RecursiveBSPNode
 */
 static void Mod_FatPVS_RecursiveBSPNode( const vec3_t org, float radius, byte *visbuffer, int visbytes, mnode_t *node, qboolean phs )
 {
-	int	i;
-
 	while( node->contents >= 0 )
 	{
 		float d = PlaneDiff( org, node->plane );
@@ -1353,7 +1373,6 @@ static void Mod_CalcSurfaceExtents( model_t *mod, msurface_t *surf )
 	int		bmins[2], bmaxs[2];
 	int		i, j, e, sample_size;
 	mextrasurf_t	*info = surf->info;
-	int		facenum = surf - mod->surfaces;
 	mtexinfo_t	*tex;
 	mvertex_t		*v;
 
@@ -1636,7 +1655,6 @@ Mod_SetupHull
 static void Mod_SetupHull( dbspmodel_t *bmod, model_t *mod, poolhandle_t mempool, int headnode, int hullnum )
 {
 	hull_t	*hull = &mod->hulls[hullnum];
-	int	count;
 
 	// assume no hull
 	hull->firstclipnode = hull->lastclipnode = 0;
@@ -1671,7 +1689,6 @@ static void Mod_SetupHull( dbspmodel_t *bmod, model_t *mod, poolhandle_t mempool
 		return;	// no hull specified
 
 	CountClipNodes32_r( bmod->clipnodes_out, hull, headnode );
-	count = hull->lastclipnode;
 
 	// fit array to real count
 	hull->clipnodes = (mclipnode_t *)Mem_Malloc( mempool, sizeof( mclipnode_t ) * hull->lastclipnode );
@@ -1682,108 +1699,66 @@ static void Mod_SetupHull( dbspmodel_t *bmod, model_t *mod, poolhandle_t mempool
 	RemapClipNodes_r( bmod->clipnodes_out, hull, headnode );
 }
 
-/*
-=================
-Mod_LoadColoredLighting
-=================
-*/
-static qboolean Mod_LoadColoredLighting( model_t *mod, dbspmodel_t *bmod )
+static qboolean Mod_LoadLitfile( model_t *mod, const char *ext, size_t expected_size, color24 **out, size_t *outsize )
 {
-	char	modelname[64];
-	char	path[64];
-	int	iCompare;
-	fs_offset_t	litdatasize;
-	byte	*in;
+	char        modelname[64], path[64];
+	int         iCompare;
+	fs_offset_t datasize;
+	byte        *in;
 
 	COM_FileBase( mod->name, modelname, sizeof( modelname ));
-	Q_snprintf( path, sizeof( path ), "maps/%s.lit", modelname );
+	Q_snprintf( path, sizeof( path ), "maps/%s.%s", modelname, ext );
 
-	// make sure what deluxemap is actual
-	if( !COM_CompareFileTime( path, mod->name, &iCompare ))
+	if( !pfnCompareFileTime( path, mod->name, &iCompare ))
 		return false;
 
 	if( iCompare < 0 ) // this may happens if level-designer used -onlyents key for hlcsg
 		Con_Printf( S_WARN "%s probably is out of date\n", path );
 
-	in = FS_LoadFile( path, &litdatasize, false );
+	in = FS_LoadFile( path, &datasize, false );
 
-	Assert( in != NULL );
-
-	if( *(uint *)in != IDDELUXEMAPHEADER || *((uint *)in + 1) != DELUXEMAP_VERSION )
+	if( !in )
 	{
-		Mem_Free( in );
+		Con_Printf( S_ERROR "couldn't load %s\n", path );
 		return false;
+	}
+
+	if( datasize <= 8 ) // header + version
+	{
+		Con_Printf( S_ERROR "%s is too short\n", path );
+		goto cleanup_and_error;
+	}
+
+	if( LittleLong( ((uint *)in)[0] ) != IDDELUXEMAPHEADER )
+	{
+		Con_Printf( S_ERROR "%s is corrupted\n", path );
+		goto cleanup_and_error;
+	}
+
+	if( LittleLong( ((uint *)in)[1] ) != DELUXEMAP_VERSION )
+	{
+		Con_Printf( S_ERROR "has %s mismatched version (%u should be %u)\n", path, LittleLong( ((uint *)in)[1] ), DELUXEMAP_VERSION );
+		goto cleanup_and_error;
 	}
 
 	// skip header bytes
-	litdatasize -= 8;
+	datasize -= 8;
 
-	if( litdatasize != ( bmod->lightdatasize * 3 ))
+	if( datasize != expected_size )
 	{
-		Con_Printf( S_ERROR "%s has mismatched size (%li should be %zu)\n", path, (long)litdatasize, bmod->lightdatasize * 3 );
-		Mem_Free( in );
-		return false;
+		Con_Printf( S_ERROR "%s has mismatched size (%li should be %zu)\n", path, (long)datasize, expected_size );
+		goto cleanup_and_error;
 	}
 
-	mod->lightdata = Mem_Malloc( mod->mempool, litdatasize );
-	memcpy( mod->lightdata, in + 8, litdatasize );
-	SetBits( mod->flags, MODEL_COLORED_LIGHTING );
-	bmod->lightdatasize = litdatasize;
+	*out = Mem_Malloc( mod->mempool, datasize );
+	memcpy( *out, in + 8, datasize );
+	*outsize = datasize;
 	Mem_Free( in );
-
 	return true;
-}
 
-/*
-=================
-Mod_LoadDeluxemap
-=================
-*/
-static void Mod_LoadDeluxemap( model_t *mod, dbspmodel_t *bmod )
-{
-	char	modelname[64];
-	fs_offset_t	deluxdatasize;
-	char	path[64];
-	int	iCompare;
-	byte	*in;
-
-	if( !FBitSet( host.features, ENGINE_LOAD_DELUXEDATA ))
-		return;
-
-	COM_FileBase( mod->name, modelname, sizeof( modelname ));
-	Q_snprintf( path, sizeof( path ), "maps/%s.dlit", modelname );
-
-	// make sure what deluxemap is actual
-	if( !COM_CompareFileTime( path, mod->name, &iCompare ))
-		return;
-
-	if( iCompare < 0 ) // this may happens if level-designer used -onlyents key for hlcsg
-		Con_Printf( S_WARN "%s probably is out of date\n", path );
-
-	in = FS_LoadFile( path, &deluxdatasize, false );
-
-	Assert( in != NULL );
-
-	if( *(uint *)in != IDDELUXEMAPHEADER || *((uint *)in + 1) != DELUXEMAP_VERSION )
-	{
-		Mem_Free( in );
-		return;
-	}
-
-	// skip header bytes
-	deluxdatasize -= 8;
-
-	if( deluxdatasize != bmod->lightdatasize )
-	{
-		Con_Reportf( S_ERROR "%s has mismatched size (%li should be %zu)\n", path, (long)deluxdatasize, bmod->lightdatasize );
-		Mem_Free( in );
-		return;
-	}
-
-	bmod->deluxedata_out = Mem_Malloc( mod->mempool, deluxdatasize );
-	memcpy( bmod->deluxedata_out, in + 8, deluxdatasize );
-	bmod->deluxdatasize = deluxdatasize;
+cleanup_and_error:
 	Mem_Free( in );
+	return false;
 }
 
 /*
@@ -1955,6 +1930,36 @@ static void Mod_LoadSubmodels( model_t *mod, dbspmodel_t *bmod )
 	}
 }
 
+static int Mod_LoadEntities_splitstr_handler( char *prev, char *next, void *userdata )
+{
+	const char *wad;
+	wadlist_t *wadlist = userdata;
+
+	*next = '\0';
+
+	if( !COM_CheckStringEmpty( prev ))
+		return 0;
+
+	COM_FixSlashes( prev );
+	wad = COM_FileWithoutPath( prev );
+
+	if( Q_stricmp( COM_FileExtension( wad ), "wad" ))
+		return 0;
+
+	// make sure that wad is really exist
+	if( FS_FileExists( wad, false ))
+	{
+		int num = wadlist->count++;
+		Q_strncpy( wadlist->wadnames[num], wad, sizeof( wadlist->wadnames[0] ));
+		wadlist->wadusage[num] = 0;
+	}
+
+	if( wadlist->count >= ARRAYSIZE( wadlist->wadnames ))
+		return 1;
+
+	return 0;
+}
+
 /*
 =================
 Mod_LoadEntities
@@ -1962,23 +1967,22 @@ Mod_LoadEntities
 */
 static void Mod_LoadEntities( model_t *mod, dbspmodel_t *bmod )
 {
-	byte	*entpatch = NULL;
-	char	token[MAX_TOKEN];
-	char	wadstring[MAX_TOKEN];
-	string	keyname;
-	char	*pfile;
+	byte   *entpatch = NULL;
+	char   token[MAX_TOKEN];
+	string keyname;
+	char   *pfile;
 
 	if( bmod->isworld )
 	{
-		char	entfilename[MAX_QPATH];
+		char        entfilename[MAX_QPATH];
 		fs_offset_t	entpatchsize;
-		size_t	ft1, ft2;
+		int         ft1, ft2;
 
-		// world is check for entfile too
+		// if world check for entfile too
 		Q_strncpy( entfilename, mod->name, sizeof( entfilename ));
 		COM_ReplaceExtension( entfilename, ".ent", sizeof( entfilename ));
 
-		// make sure what entity patch is never than bsp
+		// make sure that entity patch is never than bsp
 		ft1 = FS_FileTime( mod->name, false );
 		ft2 = FS_FileTime( entfilename, true );
 
@@ -1997,11 +2001,19 @@ static void Mod_LoadEntities( model_t *mod, dbspmodel_t *bmod )
 		}
 	}
 
-	// make sure what we really has terminator
-	mod->entities = Mem_Calloc( mod->mempool, bmod->entdatasize + 1 );
+	// make sure that we really have null terminator
+	mod->entities = Mem_Malloc( mod->mempool, bmod->entdatasize + 1 );
 	memcpy( mod->entities, bmod->entdata, bmod->entdatasize ); // moving to private model pool
-	if( entpatch ) Mem_Free( entpatch ); // release entpatch if present
-	if( !bmod->isworld ) return;
+	mod->entities[bmod->entdatasize] = 0;
+
+	if( entpatch )
+	{
+		Mem_Free( entpatch ); // release entpatch if present
+		entpatch = NULL;
+	}
+
+	if( !bmod->isworld )
+		return;
 
 	pfile = (char *)mod->entities;
 	world.generator[0] = '\0';
@@ -2020,7 +2032,9 @@ static void Mod_LoadEntities( model_t *mod, dbspmodel_t *bmod )
 			// parse key
 			if(( pfile = COM_ParseFile( pfile, token, sizeof( token ))) == NULL )
 				Host_Error( "%s: EOF without closing brace\n", __func__ );
-			if( token[0] == '}' ) break; // end of desc
+
+			if( token[0] == '}' )
+				break; // end of desc
 
 			Q_strncpy( keyname, token, sizeof( keyname ));
 
@@ -2032,33 +2046,7 @@ static void Mod_LoadEntities( model_t *mod, dbspmodel_t *bmod )
 				Host_Error( "%s: closing brace without data\n", __func__ );
 
 			if( !Q_stricmp( keyname, "wad" ))
-			{
-				char	*pszWadFile;
-
-				Q_strncpy( wadstring, token, sizeof( wadstring ) - 2 );
-				wadstring[sizeof( wadstring ) - 2] = 0;
-
-				if( !Q_strchr( wadstring, ';' ))
-					Q_strncat( wadstring, ";", sizeof( wadstring ));
-
-				// parse wad pathes
-				for( pszWadFile = strtok( wadstring, ";" ); pszWadFile != NULL; pszWadFile = strtok( NULL, ";" ))
-				{
-					COM_FixSlashes( pszWadFile );
-					COM_FileBase( pszWadFile, token, sizeof( token ));
-
-					// make sure that wad is really exist
-					if( FS_FileExists( va( "%s.wad", token ), false ))
-					{
-						int num = world.wadlist.count++;
-						Q_strncpy( world.wadlist.wadnames[num], token, sizeof( world.wadlist.wadnames[0] ));
-						world.wadlist.wadusage[num] = 0;
-					}
-
-					if( world.wadlist.count >= MAX_MAP_WADS )
-						break; // too many wads...
-				}
-			}
+				Q_splitstr( token, ';', &world.wadlist, Mod_LoadEntities_splitstr_handler );
 			else if( !Q_stricmp( keyname, "message" ))
 				Q_strncpy( world.message, token, sizeof( world.message ));
 			else if( !Q_stricmp( keyname, "compiler" ) || !Q_stricmp( keyname, "_compiler" ))
@@ -2494,13 +2482,17 @@ static void Mod_LoadTextureData( model_t *mod, dbspmodel_t *bmod, int textureInd
 	// Try WAD texture (force while r_wadtextures is 1)
 	if( !texture->gl_texturenum && (( r_wadtextures.value && world.wadlist.count > 0 ) || mipTex->offsets[0] <= 0 ))
 	{
-		int wadIndex = Mod_FindTextureInWadList( &world.wadlist, mipTex->name, texpath, sizeof( texpath ));
+		rgbdata_t *pic = NULL;
+		int wadIndex = Mod_LoadTextureFromWadList( &world.wadlist, mipTex->name, Host_IsDedicated() ? NULL : &pic, texpath, sizeof( texpath ));
 
 		if( wadIndex >= 0 )
 		{
 #if !XASH_DEDICATED
-			if( !Host_IsDedicated( ))
-				texture->gl_texturenum = ref.dllFuncs.GL_LoadTexture( texpath, NULL, 0, txFlags );
+			if( !Host_IsDedicated( ) && pic != NULL )
+			{
+				texture->gl_texturenum = ref.dllFuncs.GL_LoadTextureFromBuffer( texpath, pic, txFlags, false );
+				FS_FreeImage( pic );
+			}
 #endif // !XASH_DEDICATED
 			world.wadlist.wadusage[wadIndex]++;
 		}
@@ -2551,28 +2543,21 @@ static void Mod_LoadTextureData( model_t *mod, dbspmodel_t *bmod, int textureInd
 		}
 		else
 		{
-			char texpath[MAX_VA_STRING];
 			int wadIndex;
-			fs_offset_t srcSize = 0;
-			byte* src = NULL;
+			rgbdata_t *pic = NULL;
 
 			// NOTE: We can't load the _luma texture from the WAD as normal because it
 			// doesn't exist there. The original texture is already loaded, but cannot be modified.
 			// Instead, load the original texture again and convert it to luma.
+			wadIndex = Mod_LoadTextureFromWadList( &world.wadlist, texture->name, &pic, NULL, 0 );
 
-			wadIndex = Mod_FindTextureInWadList( &world.wadlist, texture->name, texpath, sizeof( texpath ));
-
-			if( wadIndex >= 0 )
+			if( wadIndex >= 0 && pic != NULL )
 			{
-				src = FS_LoadFile( texpath, &srcSize, false );
+				// OK, loading it from wad or hi-res(??) version
+				texture->fb_texturenum = ref.dllFuncs.GL_LoadTextureFromBuffer( texName, pic, TF_MAKELUMA, false );
+				FS_FreeImage( pic );
 				world.wadlist.wadusage[wadIndex]++;
 			}
-
-			// OK, loading it from wad or hi-res version
-			texture->fb_texturenum = ref.dllFuncs.GL_LoadTexture( texName, src, srcSize, TF_MAKELUMA );
-
-			if( src )
-				Mem_Free( src );
 		}
 	}
 #endif // !XASH_DEDICATED
@@ -2825,7 +2810,7 @@ static void Mod_LoadTexInfo( model_t *mod, dbspmodel_t *bmod )
 				out->vecs[j][k] = in->vecs[j][k];
 
 		miptex = in->miptex;
-		if( miptex < 0 || miptex > mod->numtextures )
+		if( miptex < 0 || miptex >= mod->numtextures )
 			miptex = 0; // this is possible?
 		out->texture = mod->textures[miptex];
 		out->flags = in->flags;
@@ -3366,7 +3351,8 @@ static void Mod_LoadLightVecs( model_t *mod, dbspmodel_t *bmod )
 	{
 		if( bmod->deluxdatasize > 0 )
 			Con_Printf( S_ERROR "%s: has mismatched size (%zu should be %zu)\n", __func__, bmod->deluxdatasize, bmod->lightdatasize );
-		else Mod_LoadDeluxemap( mod, bmod ); // old method
+		else
+			Mod_LoadLitfile( mod, "dlit", bmod->lightdatasize, &bmod->deluxedata_out, &bmod->deluxdatasize ); // old method
 		return;
 	}
 
@@ -3399,10 +3385,7 @@ Mod_LoadLighting
 */
 static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
 {
-	int		i, lightofs;
-	msurface_t	*surf;
-	color24		*out;
-	byte		*in;
+	int     i;
 
 	if( !bmod->lightdatasize )
 		return;
@@ -3410,15 +3393,15 @@ static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
 	switch( bmod->lightmap_samples )
 	{
 	case 1:
-		if( !Mod_LoadColoredLighting( mod, bmod ))
+		if( !Mod_LoadLitfile( mod, "lit", bmod->lightdatasize * 3, &mod->lightdata, &bmod->lightdatasize ))
 		{
-			mod->lightdata = out = (color24 *)Mem_Malloc( mod->mempool, bmod->lightdatasize * sizeof( color24 ));
-			in = bmod->lightdata;
+			mod->lightdata = (color24 *)Mem_Malloc( mod->mempool, bmod->lightdatasize * sizeof( color24 ));
 
 			// expand the white lighting data
-			for( i = 0; i < bmod->lightdatasize; i++, out++ )
-				out->r = out->g = out->b = *in++;
+			for( i = 0; i < bmod->lightdatasize; i++ )
+				mod->lightdata[i].r = mod->lightdata[i].g = mod->lightdata[i].b = bmod->lightdata[i];
 		}
+		else SetBits( mod->flags, MODEL_COLORED_LIGHTING );
 		break;
 	case 3:	// load colored lighting
 		mod->lightdata = Mem_Malloc( mod->mempool, bmod->lightdatasize );
@@ -3440,30 +3423,34 @@ static void Mod_LoadLighting( model_t *mod, dbspmodel_t *bmod )
 			SetBits( world.flags, FWORLD_HAS_DELUXEMAP );
 	}
 
-	surf = mod->surfaces;
-
 	// setup lightdata pointers
-	for( i = 0; i < mod->numsurfaces; i++, surf++ )
+	if( !mod->lightdata )
+		return;
+
+	for( i = 0; i < mod->numsurfaces; i++ )
 	{
+		int lightofs;
+
 		if( bmod->version == QBSP2_VERSION )
 			lightofs = bmod->surfaces32[i].lightofs;
-		else lightofs = bmod->surfaces[i].lightofs;
+		else
+			lightofs = bmod->surfaces[i].lightofs;
 
-		if( mod->lightdata && lightofs != -1 )
+		if( lightofs != -1 )
 		{
-			int	offset = (lightofs / bmod->lightmap_samples);
+			int offset = lightofs / bmod->lightmap_samples;
 
 			// NOTE: we divide offset by three because lighting and deluxemap keep their pointers
 			// into three-bytes structs and shadowmap just monochrome
-			surf->samples = mod->lightdata + offset;
+			mod->surfaces[i].samples = mod->lightdata + offset;
 
 			// if deluxemap is present setup it too
 			if( bmod->deluxedata_out )
-				surf->info->deluxemap = bmod->deluxedata_out + offset;
+				mod->surfaces[i].info->deluxemap = bmod->deluxedata_out + offset;
 
 			// will be used by mods
 			if( bmod->shadowdata_out )
-				surf->info->shadowmap = bmod->shadowdata_out + offset;
+				mod->surfaces[i].info->shadowmap = bmod->shadowdata_out + offset;
 		}
 	}
 }
@@ -3600,16 +3587,12 @@ static qboolean Mod_LoadBmodelLumps( model_t *mod, const byte *mod_base, qboolea
 
 	for( i = 0; i < world.wadlist.count; i++ )
 	{
-		string wadname;
-
 		if( !world.wadlist.wadusage[i] )
 			continue;
 
-		Q_snprintf( wadname, sizeof( wadname ), "%s.wad", world.wadlist.wadnames[i] );
-
 		if( !wadlist_warn )
 		{
-			ret = Q_snprintf( &wadvalue[len], sizeof( wadvalue ), "%s; ", wadname );
+			ret = Q_snprintf( &wadvalue[len], sizeof( wadvalue ), "%s; ", world.wadlist.wadnames[i] );
 			if( ret == -1 )
 			{
 				Con_DPrintf( S_WARN "Too many wad files for output!\n" );
